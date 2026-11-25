@@ -65,8 +65,8 @@ automatically while building the Java code.
 
 ## Uninstalling
 
-On Windows, simply remove the extracted directory, unless it was installed with the NSIS installer,
-in which case you can uninstall Dolphin like any other Windows application.
+On Windows, remove the installed directory for portable or user-installer installs. If Dolphin was
+installed with the NSIS installer, uninstall it like any other Windows application.
 
 Linux users can run `cat install_manifest.txt | xargs -d '\n' rm` as root from the build directory
 to uninstall Dolphin from their system.
@@ -74,6 +74,13 @@ to uninstall Dolphin from their system.
 macOS users can simply delete Dolphin.app to uninstall it.
 
 Additionally, you'll want to remove the global user directory if you don't plan on reinstalling Dolphin.
+
+### Windows user installer
+
+Run `Tools/Install-Dolphin.cmd` to open a setup wizard for the latest successful Windows development
+build. The installer downloads the build from Dolphin CI and installs it under your Windows user
+profile without requiring administrator permissions. Dolphin's user data is stored separately from
+the application files and is not removed when the application folder is replaced.
 
 ## Command Line Usage
 
