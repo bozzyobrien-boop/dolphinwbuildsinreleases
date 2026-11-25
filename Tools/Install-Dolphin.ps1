@@ -2,7 +2,6 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
 [System.Windows.Forms.Application]::EnableVisualStyles()
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $script:cancelRequested = $false
 $script:installPath = Join-Path $env:LOCALAPPDATA "Programs\Dolphin"
@@ -26,56 +25,7 @@ function Set-Progress
   [System.Windows.Forms.Application]::DoEvents()
 }
 
-function Download-File
-{
-  param([uri]$Uri, [string]$Destination, [string]$Description)
-
-  $request = [System.Net.HttpWebRequest]::Create($Uri)
-  $request.UserAgent = "DolphinUserInstaller/1.0"
-  $request.Timeout = 30000
-  $request.ReadWriteTimeout = 30000
-  $response = $null
-  $inputStream = $null
-  $outputStream = $null
-
-  try
-  {
-    $response = $request.GetResponse()
-    $inputStream = $response.GetResponseStream()
-    $outputStream = [IO.File]::Open(
-      $Destination, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None)
-    $buffer = New-Object byte[] 65536
-    $downloaded = [int64]0
-    $total = $response.ContentLength
-    while (($count = $inputStream.Read($buffer, 0, $buffer.Length)) -gt 0)
-    {
-      if ($script:cancelRequested)
-      {
-        throw "Installation was canceled."
-      }
-
-      $outputStream.Write($buffer, 0, $count)
-      $downloaded += $count
-      if ($total -gt 0)
-      {
-        $percent = [int](100 * $downloaded / $total)
-        Set-Progress "$Description ($([Math]::Round($downloaded / 1MB)) of $([Math]::Round($total / 1MB)) MB)" $percent
-      }
-      else
-      {
-        Set-Progress "$Description ($([Math]::Round($downloaded / 1MB)) MB)"
-      }
-    }
-  }
-  finally
-  {
-    if ($outputStream) { $outputStream.Dispose() }
-    if ($inputStream) { $inputStream.Dispose() }
-    if ($response) { $response.Dispose() }
-  }
-}
-
-function Get-LatestBuild
+function Get-LocalBuild
 {
   if (-not [Environment]::Is64BitOperatingSystem)
   {
@@ -86,83 +36,32 @@ function Get-LatestBuild
   if (-not $architecture) { $architecture = $env:PROCESSOR_ARCHITECTURE }
   if ($architecture -eq "ARM64")
   {
-    $builderName = "dev-win-arm64"
     $artifactSuffix = "arm64"
   }
   else
   {
-    $builderName = "dev-win-x64"
     $artifactSuffix = "x64"
   }
 
-  Set-Progress "Looking up the latest successful $artifactSuffix build..."
-  $apiRoot = "https://dolphin.ci/api/v2"
-  $builders = Invoke-RestMethod -Uri "$apiRoot/builders?limit=100" -TimeoutSec 30
-  $builder = @($builders.builders | Where-Object { $_.name -eq $builderName } | Select-Object -First 1)
-  if ($builder.Count -ne 1)
+  Set-Progress "Checking the bundled $artifactSuffix build..."
+  $archives = @(Get-ChildItem -LiteralPath $PSScriptRoot `
+      -Filter "dolphin-*-$artifactSuffix.7z" -File -ErrorAction Stop)
+  if ($archives.Count -ne 1)
   {
-    throw "The Dolphin CI builder '$builderName' could not be found."
+    throw "This installer bundle must contain exactly one $artifactSuffix Dolphin build archive."
   }
 
-  $builds = Invoke-RestMethod `
-    -Uri "$apiRoot/builds?builderid=$($builder[0].builderid)&order=-buildid&limit=10&complete=true&results=0" `
-    -TimeoutSec 30
-  $build = @($builds.builds | Where-Object { $_.complete -and $_.results -eq 0 } |
-      Sort-Object buildid -Descending | Select-Object -First 1)
-  if ($build.Count -ne 1)
-  {
-    throw "Dolphin CI has no successful Windows build available right now."
-  }
-
-  $steps = Invoke-RestMethod -Uri "$apiRoot/builds/$($build[0].buildid)/steps" -TimeoutSec 30
-  $artifacts = @(
-    foreach ($step in $steps.steps)
-    {
-      foreach ($url in $step.urls)
-      {
-        if ($url.name -match "^Dolphin-.+-$artifactSuffix\.7z$")
-        {
-          $url
-        }
-      }
-    }
-  )
-  if ($artifacts.Count -ne 1)
-  {
-    throw "The latest successful build did not provide the expected $artifactSuffix archive."
-  }
-
-  $artifactUri = [uri]$artifacts[0].url
-  if ($artifactUri.Scheme -ne "https" -or $artifactUri.Host -ne "dl.dolphin-emu.org")
-  {
-    throw "Dolphin CI returned an unexpected download location."
-  }
-
-  return $artifacts[0]
+  return $archives[0]
 }
 
 function Get-7ZipExtractor
 {
-  Set-Progress "Preparing the archive extractor..."
-  $page = Invoke-WebRequest -Uri "https://www.7-zip.org/download.html" `
-    -UseBasicParsing -TimeoutSec 30
-  $match = [regex]::Match(
-    $page.Content,
-    'https://github\.com/ip7z/7zip/releases/download/[^"''\s<>]+/7zr\.exe')
-  if (-not $match.Success)
+  Set-Progress "Preparing the bundled archive extractor..."
+  $extractorPath = Join-Path $PSScriptRoot "7zr.exe"
+  if (-not (Test-Path -LiteralPath $extractorPath -PathType Leaf))
   {
-    throw "Could not find the official 7-Zip command-line extractor."
+    throw "The installer bundle is missing 7zr.exe."
   }
-
-  $extractorUri = [uri]$match.Value
-  if ($extractorUri.Host -ne "github.com" -or
-      $extractorUri.AbsolutePath -notmatch "^/ip7z/7zip/releases/download/")
-  {
-    throw "The official 7-Zip page returned an unexpected extractor location."
-  }
-
-  $extractorPath = Join-Path $script:workDirectory "7zr.exe"
-  Download-File $extractorUri $extractorPath "Downloading archive extractor"
   return $extractorPath
 }
 
@@ -174,7 +73,7 @@ function Expand-BuildArchive
   $listing = @(& $Extractor l -slt $Archive 2>&1)
   if ($LASTEXITCODE -ne 0)
   {
-    throw "The downloaded build archive could not be read."
+    throw "The bundled build archive could not be read."
   }
 
   $archiveFullPath = [IO.Path]::GetFullPath($Archive)
@@ -210,7 +109,7 @@ function Expand-BuildArchive
   }
   if ($process.ExitCode -ne 0)
   {
-    throw "The downloaded build archive could not be extracted."
+    throw "The bundled build archive could not be extracted."
   }
 }
 
@@ -222,7 +121,7 @@ function Add-InstallWarning
   $script:cleanupWarning += $Message
 }
 
-function Install-LatestBuild
+function Install-BundledBuild
 {
   $script:cleanupWarning = ""
   $script:workDirectory = Join-Path $env:TEMP ("DolphinInstall-" + [guid]::NewGuid().ToString("N"))
@@ -236,9 +135,8 @@ function Install-LatestBuild
     New-Item -ItemType Directory -Path $parentDirectory -Force -ErrorAction Stop | Out-Null
     New-Item -ItemType Directory -Path $stagingDirectory -ErrorAction Stop | Out-Null
 
-    $archive = Get-LatestBuild
-    $archivePath = Join-Path $script:workDirectory $archive.name
-    Download-File ([uri]$archive.url) $archivePath "Downloading $($archive.name)"
+    $archive = Get-LocalBuild
+    $archivePath = $archive.FullName
 
     $extractor = Get-7ZipExtractor
     $extractDirectory = Join-Path $script:workDirectory "extracted"
@@ -344,7 +242,7 @@ function Install-LatestBuild
       }
       catch
       {
-        Add-InstallWarning "Temporary download files could not be removed from $script:workDirectory"
+        Add-InstallWarning "Temporary installer files could not be removed from $script:workDirectory"
       }
     }
   }
@@ -384,7 +282,7 @@ foreach ($pageName in @("welcome", "location", "confirm", "progress", "complete"
 }
 
 $welcomeText = New-Object System.Windows.Forms.Label
-$welcomeText.Text = "This wizard installs the latest successful Windows development build of Dolphin.`r`n`r`nThe build is downloaded from Dolphin CI. Dolphin will be installed for your Windows account only; no administrator permission is needed."
+$welcomeText.Text = "This wizard installs the Windows development build included with this installer bundle.`r`n`r`nAll installation files are local; no network access is needed. Dolphin will be installed for your Windows account only, with no administrator permission."
 $welcomeText.Location = New-Object System.Drawing.Point(4, 8)
 $welcomeText.Size = New-Object System.Drawing.Size(530, 130)
 $pages.welcome.Controls.Add($welcomeText)
@@ -537,7 +435,7 @@ $nextButton.Add_Click({
         throw "Choose an empty folder or an existing Dolphin installation."
       }
       $script:createDesktopShortcut = $desktopCheckBox.Checked
-      $confirmText.Text = "The latest successful development build will be installed to:`r`n$script:installPath`r`n`r`nAn existing Dolphin installation in this folder will be replaced. Dolphin's user data is kept separately."
+      $confirmText.Text = "The bundled development build will be installed to:`r`n$script:installPath`r`n`r`nAn existing Dolphin installation in this folder will be replaced. Dolphin's user data is kept separately."
       Show-Page "confirm"
     }
     catch
@@ -567,7 +465,7 @@ $nextButton.Add_Click({
     $backButton.Enabled = $false
     try
     {
-      Install-LatestBuild
+      Install-BundledBuild
       if ($script:cleanupWarning)
       {
         $completeText.Text = "Dolphin was installed with the following notice:`r`n$script:cleanupWarning"

@@ -77,10 +77,11 @@ Additionally, you'll want to remove the global user directory if you don't plan 
 
 ### Windows user installer
 
-Run `Tools/Install-Dolphin.cmd` to open a setup wizard for the latest successful Windows development
-build. The installer downloads the build from Dolphin CI and installs it under your Windows user
-profile without requiring administrator permissions. Dolphin's user data is stored separately from
-the application files and is not removed when the application folder is replaced.
+Download and extract the Windows User Installer release bundle, then run `Install-Dolphin.cmd`.
+The bundle includes the Dolphin x64 and ARM64 builds and all tools needed to install locally, without
+network access or administrator permissions. Dolphin is installed under your Windows user profile.
+Its user data is stored separately from the application files and is not removed when the application
+folder is replaced.
 
 ## Command Line Usage
 
